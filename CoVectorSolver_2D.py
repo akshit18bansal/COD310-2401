@@ -4,23 +4,17 @@ import math
 import cv2 as cv
 
 #Grid and parameters
-nx, ny = 256, 256
+nx, ny = 256,256
 L = 2*math.pi
 hx, hy = L / nx, L / ny  
+h = hx
 dt = 0.1
 
 #Initialize velocity fields and smoke
-u = np.ones((nx, ny))  # u velocity component
-v = np.ones((nx, ny))  # v velocity component
-u1 = np.ones((nx, ny))  # u velocity component
-v1 = np.ones((nx, ny))  # v velocity component
-smoke = np.zeros((nx, ny))
+u = np.zeros((nx, ny))  # u velocity component
+v = np.zeros((nx, ny))  # v velocity component
 
-
-#Starting particle positions
-x_pos, y_pos = 128,128
-smoke[x_pos, y_pos] = 1
-
+smoke = np.ones((nx, ny))
 
 
 def set_init_velocity(do_taylor_green):
@@ -28,21 +22,51 @@ def set_init_velocity(do_taylor_green):
         
         for j in range(ny):
             for i in range(nx):
-                x = hx * i
+                x = hx * i + 0.5*hx
                 y = hy * j
                 u[i, j] = math.sin(x) * math.cos(y)
-                u1[i, j] = u[i, j]
+                # print(u[i, j])
                 
 
        
         for j in range(ny):
             for i in range(nx):
                 x = hx * i
-                y = hy * j 
+                y = hy * j + 0.5 * hy
                 v[i, j] = -math.cos(x) * math.sin(y)
-                v1[i, j] = v[i,j]
+                # v1[i, j] = v[i,j]
 
 set_init_velocity(do_taylor_green=True)
+
+def sampleField(x,y, field):
+   
+    # Find grid cell indices (i, j)
+    i = math.floor(x / h)
+    j = math.floor(y / h)
+    
+    # Compute fractional offsets within the cell
+    cx = (x / h) - i
+    cy = (y / h) - j
+
+    i = mirror_pad_index(math.floor(x / h),u.shape[0] - 1)
+    j = mirror_pad_index(math.floor(y / h),v.shape[0] - 1)
+    i1 = mirror_pad_index(i+1,u.shape[0] - 1)
+    j1 = mirror_pad_index(j+1,v.shape[0] - 1)
+    
+    # Sample the field at the four corners of the grid cell
+    v00 = field[i,j]         # Bottom-left
+    v01 = field[i1,j]    # Bottom-right
+    v10 = field[i,j1]    # Top-left
+    v11 = field[i1,j1]  # Top-right
+    
+    # Perform bilinear interpolation
+    return bilerp(v00, v01, v10, v11, cx, cy)
+
+def clamp_pos(x, y):
+    x = min(max(0.0 * h, x), float(nx * h) - 0.0 * h)
+    y = min(max(0.0 * h, y), float(ny * h) - 0.0 * h)
+    return x, y
+
 
 
 #RK4 trace method
@@ -66,60 +90,31 @@ def traceRK4(x, y, dt):
     v4 = bilerp_v(x4, y4)
     
     x, y = x + c1 * u11 + c2 * u2 + c3 * u3 + c4 * u4, y + c1 * v11 + c2 * v2 + c3 * v3 + c4 * v4
-    return mirror_pad_index(x, u.shape[0] - 1), mirror_pad_index(y, v.shape[1] - 1)
+    return clamp_pos(x,y)
 
 #Bilinear interpolation and velocity sampling
 def bilerp_u(x,y):
-    x0, y0 = int(x//hx), int(y//hy)
-    x1, y1 = x0+1, y0+1
-    # x1 = np.clip(x1, 0, u.shape[0] - 1)
-    # y1 = np.clip(y1, 0, u.shape[1] - 1)
-    x0 = mirror_pad_index(x0, u.shape[0] - 1)
-    y0 = mirror_pad_index(y0, u.shape[1] - 1)
-    x1 = mirror_pad_index(x1, u.shape[0] - 1)
-    y1 = mirror_pad_index(y1, u.shape[1] - 1)
-    a = (x - x0 * hx) / hx  
-    b = (y - y0 * hy) / hy  
-
-    # a = x-x0*hx
-    # b = y-y0*hy-hy/2
- 
-    return bilerp(u[x0,y0],u[x0,y1],u[x1,y0],u[x1,y1],a,b)
-    # return (1-a)(1-b)*u[x0,y0] + a*b*u[x1,y1] + (1-a)*b*u[x0,y1] + a(1-b)*u[x1,y0]
+    
+    return sampleField(x-0.5*h,y,u)
 
 def bilerp_v(x,y):
+   
+    return sampleField(x,y-0.5*h,v)
 
-    x0, y0 = int(x//hx),int(y//hy)
-    x1, y1 = x0+1, y0+1
-
-    # x1 = np.clip(x1, 0, u.shape[0] - 1)
-    # y1 = np.clip(y1, 0, u.shape[1] - 1)
-    x0 = mirror_pad_index(x0, u.shape[0] - 1)
-    y0 = mirror_pad_index(y0, u.shape[1] - 1)
-    x1 = mirror_pad_index(x1, u.shape[0] - 1)
-    y1 = mirror_pad_index(y1, u.shape[1] - 1)
-    a = (x - x0 * hx) / hx  
-    b = (y - y0 * hy) / hy  
-
-    # a = abs(x-x0*hx-hx/2)
-    # b = y-y0*hy
-  
-    return bilerp(v[x0,y0],v[x0,y1],v[x1,y0],v[x1,y1],a,b)
 def lerp(v0, v1, c):
     return (1 - c) * v0 + c * v1
 
 def bilerp(v00, v01, v10, v11, cx, cy):
     return lerp(lerp(v00, v01, cx), lerp(v10, v11, cx), cy)
+
 def sample_velocity(x, y):
-    # Bilinear interpolation of u and v
-    # i, j = int(x // hx), int(y // hy)
-    # fx, fy = (x / hx) - i, (y / hy) - j  # Fractional part
 
     u_val = bilerp_u(x,y)
     v_val = bilerp_v(x,y)
-    # print(u_val, v_val)
+  
     return u_val, v_val
-def solveODE(x,y):
+
+def solveODE(x,y,dt):
        
         x1,y1 = traceRK4(x,y,dt)
         ddt = dt/2
@@ -150,88 +145,20 @@ def mirror_pad_index(i, max_i):
     else:
         return i
 #Semi-Lagrangian advection
-def semi_lag_advect(x, y, u, v, dt):
+def semi_lag_advect(x, y, field):
     
-    x1,y1 = solveODE(x,y)
-   
-    x1 = mirror_pad_index(x1, u.shape[0] - 1) 
-    y1 = mirror_pad_index(y1, u.shape[1] - 1)
-    u1_val, v1_val = sample_velocity(x1, y1)
-    # smoke[int(x_pos), int(y_pos)] = smoke_dup[int(x_new), int(y_new)]
-    u1[int(x),int(y)] = u1_val
-    v1[int(x),int(y)] = v1_val
-    x_new = x + dt * u1_val  
-    y_new = y + dt * v1_val
-    x_new = mirror_pad_index(x_new, u.shape[0] - 1)  
-    y_new = mirror_pad_index(y_new, u.shape[1] - 1)
-    u[int(x),int(y)] = u1[int(x),int(y)] 
-    v[int(x),int(y)] = v1[int(x),int(y)]
-    # print(x_new,y_new)
-    return x_new, y_new
-
-def set_init_rayleigh_taylor(ni, nj, h, layer_height, rho, temperature, rho_init, rho_orig, T_init, T_orig):
-    # Center position for the Rayleigh-Taylor initialization
-    center = np.array([0.1, layer_height])
-    radius = 0.04
-
-    # Loop over all grid points
-    for tIdx in range(ni * nj):
-        i = tIdx % ni
-        j = tIdx // ni
-
-        # Calculate the position of the cell in the grid
-        pos = h * (np.array([i, j]) + 0.5)
-
-        # Check if the distance from the center is within the specified radius
-        if dist(center, pos) < radius:
-            # Set density to 1 inside the radius
-            rho[i, j] = 1.0
-            rho_init[i, j] = 1.0
-            rho_orig[i, j] = 1.0
-        else:
-            # Set temperature to 1 outside the radius
-            temperature[i, j] = 1.0
-            T_init[i, j] = 1.0
-            T_orig[i, j] = 1.0
-
-def semi_lag_advect_density(x, y, u, v, dt, field):
-   
-    # Trace back the particle's position
-    x_prev, y_prev = solveODE(x, y)
+    x1,y1 = solveODE(x,y,-dt)
     
-    # Ensure the traced-back positions stay within the grid bounds
-    x_prev = mirror_pad_index(x_prev, field.shape[0] - 1)
-    y_prev = mirror_pad_index(y_prev, field.shape[1] - 1)
+    value = sampleField(x1,y1,field)
+    return value
 
-    # Bilinearly interpolate the field value (density/smoke) at the traced-back position
-    field_val = bilerp(field[int(x_prev), int(y_prev)],
-                       field[int(x_prev), int(y_prev+1)],
-                       field[int(x_prev+1), int(y_prev)],
-                       field[int(x_prev+1), int(y_prev+1)],
-                       (x_prev % 1), (y_prev % 1))
-
-    return field_val
-
-
-p = np.ones((nx, ny)) 
-
-def gauss_seidel_project(dx):
-    for i in range(1,nx,2):
-        for j in range(1,ny,2):
-            divergence =  (u[i+1,j]-u[i,j])/dx + (v[i,j+1]-v[i,j])/dx
-            del2_p = (p[i+1,j]+p[i,j+1]+p[i,j+1]+p[i,j-1]-4*p[i,j])/(dx*dx)
-            p[i,j] = 0.25*(p[i+1,j]+p[i,j+1]+p[i,j+1]+p[i,j-1]+divergence)
-    for i in range(2,nx,2):
-        for j in range(2,ny,2):
-            divergence =  (u[i+1,j]-u[i,j])/dx + (v[i,j+1]-v[i,j])/dx
-            del2_p = (p[i+1,j]+p[i,j+1]+p[i,j+1]+p[i,j-1]-4*p[i,j])/(dx*dx)
-            p[i,j] = 0.25*(p[i+1,j]+p[i,j+1]+p[i,j+1]+p[i,j-1]+divergence)
 
 def calculate_curl(u,v):
     curl = np.zeros((nx, ny))
     for i in range(1,nx-1):
         for j in range(1,ny-1):
             curl[i,j] = -(u[i,j]-u[i,j-1])/hy + (v[i,j]-v[i-1,j])/hx
+   
     return curl
 
 def DisplayOutputVorticity(curl):
@@ -242,29 +169,68 @@ def DisplayOutputVorticity(curl):
     for i in range(nx):
         for j in range(ny):
             curl[i,j]=abs(curl[i,j])
-    curl_norm = (curl - np.min(curl))/(np.max(curl) - np.min(curl))
-    cv.imshow("Vorticities", curl_norm)
+    curl_norm = (curl - np.min(curl))/(np.max(curl) - np.min(curl) + 1e-5)
+    curl_8bit = (curl_norm * 255).astype(np.uint8)
+    
+    # Apply a colormap to the curl values
+    curl_colored = cv.applyColorMap(curl_8bit, cv.COLORMAP_HSV) 
+    
+    # Display the colored vorticity field
+    cv.imshow("Vorticities", curl_colored)
     cv.waitKey(1)
 
+import matplotlib.pyplot as plt
 
+
+def display_density(density, t):
+    plt.imshow(density, cmap='inferno', origin='lower', vmin=0, vmax=1)
+    plt.colorbar(label='Density')
+    plt.title(f"Density Field at Time Step: {t}")
+    plt.pause(0.1)  # Pause to update the plot
+    plt.clf()  # Clear the figure for the next time step
+
+def set_init_rayleigh_taylor():
+    # Center position for the Rayleigh-Taylor initialization
+    
+    radius = 0.04
+
+    # Loop over all grid points
+    for tIdx in range(nx * ny):
+        i = tIdx % nx
+        j = tIdx // ny
+
+        # Calculate the position of the cell in the grid
+        x = h * (i + 0.5)
+        y = h * (j + 0.5)
+
+        # Check if the distance from the center is within the specified radius
+        if dist(0.1,0.1,x,y) < radius:
+            # Set density to 1 inside the radius
+            smoke[i, j] = 1.0
+          
+set_init_rayleigh_taylor()      
 #Simulation loop
-timesteps = 100
+timesteps = 10
 for t in range(timesteps):
-    smoke_new = np.zeros_like(smoke)
-    smoke.fill(0)
-    x_pos, y_pos = semi_lag_advect(x_pos, y_pos, u, v, dt)
-    smoke[int(x_pos),int(y_pos)]=10
-    # smoke_new[int(x_pos), int(y_pos)] = semi_lag_advect_density(x_pos,y_pos,u,v,dt,smoke)
+    smoke_new = np.ones_like(smoke)
+    u_new = np.zeros_like(u)
+    v_new = np.zeros_like(v)
     curl = calculate_curl(u,v)
     DisplayOutputVorticity(curl)
-    #Visualization
+    display_density(smoke, t)
+    print(t)
+    for i in range(nx):
+        for j in range(ny):
+            # Semi-Lagrangian advection to update velocities at each grid point
+            u_new[i, j] = semi_lag_advect(i,j,u)
+            v_new[i, j] = semi_lag_advect(i,j,v)
+            
+            # Semi-Lagrangian advection to update the smoke field
+            smoke_new[i, j] = semi_lag_advect(i, j, smoke)
 
-    plt.imshow(smoke, cmap='gray_r', origin='lower', vmin=0, vmax=1)
-    plt.title(f"Time step: {t}")
-    plt.pause(0.1)
-    plt.clf()
+    u = u_new.copy()
+    v = v_new.copy()
+    smoke = smoke_new.copy()
+    display_density(smoke, t)
 
 plt.show()
-
-#density field
-#jax pytorch
